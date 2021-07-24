@@ -3,6 +3,7 @@ import argparse
 import tempfile
 import shutil
 import json
+import time
 
 import tqdm
 # import nltk
@@ -10,6 +11,8 @@ from gtts import gTTS, lang
 
 SEGMENT_SIZE_MAX = 5000
 SEGMENT_SIZE_MIN = 100
+
+MAX_WAIT = 128
 
 parser = argparse.ArgumentParser(
     description='Uses Google TTS to read up a long text file and split to pieces.'
@@ -61,6 +64,15 @@ parser.add_argument(
 args = parser.parse_args()
 
 
+def do_tts(*args, **kwargs):
+    wait_time=1
+    for i in range (MAX_WAIT):
+        try: 
+            return gTTS(segment, lang=args.language)
+        except:
+            time.sleep(wait_time)
+            wait_time *=2
+    return None
 
 if __name__ == '__main__':
     if args.is_list_all_languages:
@@ -105,10 +117,14 @@ if __name__ == '__main__':
     
     for segment in tqdm.tqdm(segments, desc="Calling TTS srervice"):
         if len(segment) > 0:
-            tts = gTTS(segment, lang=args.language) 
+            tts =  do_tts(segment, lang=args.language)
+            if not tts:
+                # Fail.
+                exit(-1)
             with tempfile.NamedTemporaryFile('wb', delete=False,suffix='.mp3') as tmp:
                 tts.write_to_fp(tmp)
                 tmp_files.append(tmp.name)
+
 
     if os.path.exists(args.output_file):
         os.unlink(args.output_file)
