@@ -204,7 +204,8 @@ if __name__ == '__main__':
             auto_save_count=0
             for segment in tqdm.tqdm(segments, desc='Calling TTS srervice'):
                 text=segment['text']
-                if len(text) > 0 and 'mp3' not in segment:
+                has_mp3 = 'mp3' in segment and os.path.exists(segment['mp3'])
+                if len(text) > 0 and not has_mp3:
                     segment['mp3']=do_tts(text, lang=args.language)
                     if auto_save_count >= AUTO_SAVE_COUNT:
                         LOG.info('Autosave...')
