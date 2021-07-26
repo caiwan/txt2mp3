@@ -227,10 +227,10 @@ if __name__ == '__main__':
 
     if os.path.exists(args.output_file):
         os.unlink(args.output_file)
-    with open(args.output_file, 'rb') as fp:
+    with open(args.output_file, 'wb') as fp:
         for segment in tqdm.tqdm(segments, desc='Joining segments'):
             tmp_file=segment['mp3']
-            with open(tmp_file, 'wb') as tmp:
+            with open(tmp_file, 'rb') as tmp:
                 shutil.copyfileobj(tmp, fp)
             os.unlink(tmp_file)
 
