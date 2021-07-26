@@ -8,8 +8,11 @@ import json
 import time
 import zipfile
 
+import logging
+
 import tqdm
-# import nltk
+from tqdm.contrib.logging import logging_redirect_tqdm
+
 from gtts import gTTS, lang
 
 SEGMENT_SIZE_MAX = 5000
@@ -18,6 +21,8 @@ SEGMENT_SIZE_MIN = 100
 MAX_WAIT = 128
 
 AUTO_SAVE_COUNT = 100
+
+LOG = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(
     description='Uses Google TTS to read up a long text file and split to pieces.'
@@ -79,13 +84,16 @@ args = parser.parse_args()
 def do_tts(*args, **kwargs):
     wait_time = 1
     for i in range(MAX_WAIT):
-        try:
-            return gTTS(*args, **kwargs)
+        try:  
+            tts=gTTS(*args, **kwargs)             
+            with tempfile.NamedTemporaryFile('wb', delete=False, suffix='.mp3') as tmp:
+              tts.write_to_fp(tmp)
+              return tmp.name
         except:
-            print(f'Wait for {wait_time}')
+            LOG.info(f'Wait for {wait_time}')
             time.sleep(wait_time)
             wait_time *= 2
-    return None
+    raise RuntimeError()
 
 
 def pack_archive(data, recover_file_name, delete_files=True):
@@ -113,22 +121,26 @@ def pack_archive(data, recover_file_name, delete_files=True):
                 recover_file.write(d['mp3'], arcname=os.path.basename(d['mp3']))
                 if delete_files:
                     os.unlink(d['mp3'])
+    LOG.info(f'Packing OK {recover_file_name}')
 
 
 def unpack_archive(recover_file_name):
     extract_dir = tempfile.gettempdir()
     with zipfile.ZipFile(recover_file_name, 'r') as recover_file:
-        with recover_file.open("recover.json") as f:
+        with recover_file.open('recover.json') as f:
             data=json.load(f)
-        for d in tqdm.tqdm(data, desc="Unpacking"):
+        for d in tqdm.tqdm(data, desc='Unpacking'):
             if 'mp3' in d:
                 recover_file.extract(d['mp3'], path=extract_dir)
                 d['mp3'] = os.path.join(extract_dir, d['mp3'])
+    LOG.info(f'Unpacking OK {recover_file_name}')
     return data
 
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO,format='[%(levelname)s]: %(message)s')
+
     if args.is_list_all_languages:
         for (code, name) in lang.tts_langs().items():
             print(f'{code}: {name}')
@@ -138,18 +150,18 @@ if __name__ == '__main__':
     is_read_recover=args.input_file == '' and args.recover_file != ''
 
     if not is_read_input and not is_read_recover:
-        print('-i or -r must be specified.')
+        LOG.error('-i or -r must be specified.')
         parser.print_help()
         exit(-1)
 
     recover_file=args.recover_file if args.recover_file != '' else args.output_file + '.resume'
 
     if is_read_input and not os.path.exists(args.input_file):
-        print(f'File {args.input_file} does not exists')
+        LOG.error(f'File {args.input_file} does not exists')
         exit(-1)
 
     if is_read_recover and not os.path.exists(recover_file):
-        print(f'Recover file {args.input_file} does not exists')
+        LOG.error(f'Recover file {args.input_file} does not exists')
         exit(-1)
 
     segment_size=args.segment_size if args.segment_size >= SEGMENT_SIZE_MIN else SEGMENT_SIZE_MIN if args.segment_size <= SEGMENT_SIZE_MAX else SEGMENT_SIZE_MAX
@@ -187,35 +199,42 @@ if __name__ == '__main__':
 
         pack_archive(segments, recover_file)
 
-    try:
-        auto_save_count=0
-        for segment in tqdm.tqdm(segments, desc='Calling TTS srervice'):
-            text=segment['text']
-            if len(text) > 0 and 'mp3' not in segment:
-                tts=do_tts(text, lang=args.language)
-                if not tts:
-                    raise RuntimeError()
-                with tempfile.NamedTemporaryFile('wb', delete=False, suffix='.mp3') as tmp:
-                    tts.write_to_fp(tmp)
-                    segment['mp3']=tmp.name
+    with logging_redirect_tqdm():
+        try:
+            auto_save_count=0
+            for segment in tqdm.tqdm(segments, desc='Calling TTS srervice'):
+                text=segment['text']
+                if len(text) > 0 and 'mp3' not in segment:
+                    segment['mp3']=do_tts(text, lang=args.language)
+                    if auto_save_count >= AUTO_SAVE_COUNT:
+                        LOG.info('Autosave...')
+                        pack_archive(segments, recover_file, delete_files=False)
+                        auto_save_count=0
 
-                if auto_save_count >= AUTO_SAVE_COUNT:
-                    pack_archive(segments, recover_file, delete=False)
-                    auto_save_count=0
+                    auto_save_count += 1
+        except KeyboardInterrupt:
+            LOG.info('Exiting...')
+            pack_archive(segments, recover_file)
+            exit(0)
+        except:
+            LOG.exception('Exiting...')
+            pack_archive(segments, recover_file)
+            exit(-1)
 
-                auto_save_count += 1
-    except:
-        pack_archive(segments, recover_file)
-        exit(-1)
+    pack_archive(segments, recover_file)
+
+    LOG.info('TTS Done')
 
     if os.path.exists(args.output_file):
         os.unlink(args.output_file)
     with open(args.output_file, 'wb') as fp:
-        for segment in tqdm.tqdm(segment, desc='Joining segments'):
-            tmp_file=segment['mp3_file']
+        for segment in tqdm.tqdm(segments, desc='Joining segments'):
+            tmp_file=segment['mp3']
             with open(tmp_file, 'rb') as tmp:
                 shutil.copyfileobj(tmp, fp)
             os.unlink(tmp_file)
+
+    LOG.info('Joining MP3 Done')
 
     if os.path.exists(recover_file):
         os.unlink(recover_file)
